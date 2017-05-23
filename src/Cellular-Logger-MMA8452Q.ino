@@ -412,11 +412,13 @@
      FRAMwrite8(pointer+HOURLYBATTOFFSET,stateOfCharge);
      unsigned int newHourlyPointerAddr = (FRAMread16(HOURLYPOINTERADDR)+1) % HOURLYCOUNTNUMBER;  // This is where we "wrap" the count to stay in our memory space
      FRAMwrite16(HOURLYPOINTERADDR,newHourlyPointerAddr);
+     // Take the temperature and report to Ubidots - may set up custom webhooks later
+     float currentTemp = getTemperature(0);  // 0 argument for degrees F
      i=0;         // Reset the pointer for responses from Ubidots
      stateOfCharge = batteryMonitor.getSoC();
-     String data = String::format("{\"hourly\":%i, \"battery\":%.1f}",hourlyPersonCount, stateOfCharge);
+     String data = String::format("{\"hourly\":%i, \"battery\":%.1f, \"temp\":%.1f}",hourlyPersonCount, stateOfCharge, currentTemp);
      Particle.publish("hourly", data, PRIVATE);
-     hourlyPersonCount = 0;                    // Reset and increment the Person Count in the new period
+     hourlyPersonCount = 0;               // Reset and increment the Person Count in the new period
      currentHourlyPeriod = HOURLYPERIOD;  // Change the time period
      Serial.println(F("Hourly Event Logged"));
  }
@@ -661,7 +663,7 @@ float getTemperature(bool degC)
   voltage /= 4096.0;        // This is different than the Arduino where there are only 1024 steps
 
   // now print out the temperature
-  float temperatureC = (voltage - 0.5) * 100 ;  //converting from 10 mv per degree with 500 mV offset to degrees ((voltage - 500mV) times 100)
+  float temperatureC = ((voltage - 0.5) * 100) - 5 ;  //converting from 10 mv per degree with 500 mV offset to degrees ((voltage - 500mV) times 100) - 5 degree calibration
   // now convert to Fahrenheit
   float temperatureF = (temperatureC * 9.0 / 5.0) + 32.0;
 
