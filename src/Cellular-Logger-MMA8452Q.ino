@@ -112,6 +112,7 @@
      Serial.println(releaseNumber);
 
      Particle.subscribe("hook-response/hourly", myHandler, MY_DEVICES);      // Subscribe to the integration response event
+     Particle.subscribe("hook-response/daily", myHandler, MY_DEVICES);      // Subscribe to the integration response event
 
      pinMode(int2Pin,INPUT);            // accelerometer interrupt pinMode
      pinMode(blueLED, OUTPUT);           // declare the Red LED Pin as an output
@@ -160,6 +161,7 @@
      {
          Serial.print(F("Could not connect to MMA8452Q: 0x"));
          Serial.println(c, HEX);
+         BlinkForever();
      }
      initMMA8452(SCALE,dataRate);
 
@@ -610,7 +612,7 @@ void NonBlockingDelay(int millisDelay)  // Used for a non-blocking delay
 
 void BlinkForever() // When something goes badly wrong...
 {
-    Serial.println(F("Error - Reboot"));
+    Serial.println(F("Error - Cannot Proceed"));
     while(1) {
         digitalWrite(blueLED,HIGH);
         delay(200);
