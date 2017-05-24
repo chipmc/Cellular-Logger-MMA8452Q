@@ -44,17 +44,10 @@
  #define DAILYBATTOFFSET 4           // Where the battery charge is stored
  #define HOURLYCOUNTOFFSET 4         // Offsets for the values in the hourly words
  #define HOURLYBATTOFFSET 6          // Where the hourly battery charge is stored
- // LED Pin Value Variables
- #define REDLED 4          // led connected to digital pin 4
- #define YELLOWLED 6       // The yellow LED
- #define LEDPWR 7          // This pin turns on and off the LEDs
  // Finally, here are the variables I want to change often and pull them all together here
  #define SOFTWARERELEASENUMBER "0.1"
  #define PARKCLOSES 19
  #define PARKOPENS 7
- // Defines for Ubidots
- #define TOKEN "6EALvOEabrFiA6XViWY3hxcFMG0yDr"  // Put here your Ubidots TOKEN
- #define DATA_SOURCE_NAME "umstead-electron-1"
 
  // Included Libraries
  #include "Adafruit_FRAM_I2C.h"  // Library for FRAM functions
@@ -63,12 +56,9 @@
  Adafruit_FRAM_I2C fram = Adafruit_FRAM_I2C(); // Init the FRAM
  FuelGauge batteryMonitor;      // Prorotype for the fuel gauge (included in Particle core library)
 
-
  // Pin Constants
  const int int2Pin = D2;
- const int redLED = D7;
- const int yellowLED = B1;
- const int greenLED = B0;
+ const int blueLED = D7;
  const int tmp36Pin = A2;
 
  // Program Constants
@@ -105,8 +95,6 @@
  int menuChoice=0;                   // Menu Selection
  boolean refreshMenu = true;         //  Tells whether to write the menu
  boolean inTest = false;             // Are we in a test or not
- boolean LEDSon = true;              // Are the LEDs on or off
- unsigned int LEDSonTime = 30000;    // By default, turn the LEDS on for 30 seconds - remember only awake time counts not real seconds
  int numberHourlyDataPoints;         // How many hourly counts are there
  int numberDailyDataPoints;          // How many daily counts are there
  const char* releaseNumber = SOFTWARERELEASENUMBER;  // Displays the release on the menu
@@ -126,9 +114,7 @@
      Particle.subscribe("hook-response/hourly", myHandler, MY_DEVICES);      // Subscribe to the integration response event
 
      pinMode(int2Pin,INPUT);            // accelerometer interrupt pinMode
-     pinMode(redLED, OUTPUT);           // declare the Red LED Pin as an output
-     pinMode(yellowLED, OUTPUT);        // declare the Yellow LED Pin as as OUTPUT
-     pinMode(greenLED,OUTPUT);          // declare the Yellow LED Pin as as OUTPUT
+     pinMode(blueLED, OUTPUT);           // declare the Red LED Pin as an output
 
      if (fram.begin()) {                // you can stick the new i2c addr in here, e.g. begin(0x51);
          Serial.println(F("Found I2C FRAM"));
@@ -350,7 +336,7 @@
          Serial.print(F("  Time: "));
          Serial.println(Time.timeStr(t)); // Prints time t - example: Wed May 21 01:08:47 2014
          ledState = !ledState;              // toggle the status of the LEDPIN:
-         digitalWrite(redLED, ledState);    // update the LED pin itself
+         digitalWrite(blueLED, ledState);    // update the LED pin itself
       }
          else if (millis() < lastBump + debounce) {
              Serial.print(F("Tap was debounced - lastBump = "));
@@ -626,9 +612,9 @@ void BlinkForever() // When something goes badly wrong...
 {
     Serial.println(F("Error - Reboot"));
     while(1) {
-        digitalWrite(redLED,HIGH);
+        digitalWrite(blueLED,HIGH);
         delay(200);
-        digitalWrite(redLED,LOW);
+        digitalWrite(blueLED,LOW);
         delay(200);
     }
 }
