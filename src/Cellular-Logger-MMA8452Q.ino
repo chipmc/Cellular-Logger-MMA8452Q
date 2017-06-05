@@ -208,8 +208,14 @@
                Serial.println(FRAMread16(CURRENTDAILYCOUNTADDR));
                printSignalStrength();
                Serial.print("Temperature in case: ");
-               Serial.print(getTemperature(0)); // Returns temp in F
+               float currentTemp = getTemperature(0);
+               Serial.print(currentTemp); // Returns temp in F
                Serial.println(" degrees F");
+               Serial.println("Sending to Ubidots via Webhook");
+               i=0;         // Reset the pointer for responses from Ubidots
+               String data = String::format("{\"hourly\":%i, \"battery\":%.1f, \"temp\":%.1f}",hourlyPersonCount, stateOfCharge, currentTemp);
+               Particle.publish("hourly", data, PRIVATE);
+
                break;
            case '2':     // Set the time zone - to be implemented
                break;
@@ -245,7 +251,7 @@
                FRAMwrite16(CURRENTHOURLYCOUNTADDR, 0);  // Reset Hourly Count in memory
                hourlyPersonCount = 0;
                dailyPersonCount = 0;
-               Serial.println(F("Resetting Counters and Simblee"));
+               Serial.println(F("Resetting Counters"));
                break;
            case '6': // Reset FRAM Memory
                ResetFRAM();
