@@ -208,14 +208,10 @@
                Serial.println(FRAMread16(CURRENTDAILYCOUNTADDR));
                printSignalStrength();
                Serial.print("Temperature in case: ");
-               float currentTemp = getTemperature(0);
-               Serial.print(currentTemp); // Returns temp in F
+               Serial.print(getTemperature(0)); // Returns temp in F
                Serial.println(" degrees F");
                Serial.println("Sending to Ubidots via Webhook");
-               i=0;         // Reset the pointer for responses from Ubidots
-               String data = String::format("{\"hourly\":%i, \"battery\":%.1f, \"temp\":%.1f}",hourlyPersonCount, stateOfCharge, currentTemp);
-               Particle.publish("hourly", data, PRIVATE);
-
+               SendHourlyEvent();
                break;
            case '2':     // Set the time zone - to be implemented
                break;
@@ -406,15 +402,23 @@
      FRAMwrite8(pointer+HOURLYBATTOFFSET,stateOfCharge);
      unsigned int newHourlyPointerAddr = (FRAMread16(HOURLYPOINTERADDR)+1) % HOURLYCOUNTNUMBER;  // This is where we "wrap" the count to stay in our memory space
      FRAMwrite16(HOURLYPOINTERADDR,newHourlyPointerAddr);
-     // Take the temperature and report to Ubidots - may set up custom webhooks later
-     float currentTemp = getTemperature(0);  // 0 argument for degrees F
-     i=0;         // Reset the pointer for responses from Ubidots
-     stateOfCharge = batteryMonitor.getSoC();
-     String data = String::format("{\"hourly\":%i, \"battery\":%.1f, \"temp\":%.1f}",hourlyPersonCount, stateOfCharge, currentTemp);
-     Particle.publish("hourly", data, PRIVATE);
-     hourlyPersonCount = 0;               // Reset and increment the Person Count in the new period
-     currentHourlyPeriod = HOURLYPERIOD;  // Change the time period
-     Serial.println(F("Hourly Event Logged"));
+     if (SendHourlyEvent())
+     {
+       hourlyPersonCount = 0;               // Reset and increment the Person Count in the new period
+       currentHourlyPeriod = HOURLYPERIOD;  // Change the time period
+       Serial.println(F("Hourly Event Logged"));
+     }
+ }
+
+ bool SendHourlyEvent()
+ {
+   // Take the temperature and report to Ubidots - may set up custom webhooks later
+   float currentTemp = getTemperature(0);  // 0 argument for degrees F
+   i=0;         // Reset the pointer for responses from Ubidots
+   stateOfCharge = batteryMonitor.getSoC();
+   String data = String::format("{\"hourly\":%i, \"battery\":%.1f, \"temp\":%.1f}",hourlyPersonCount, stateOfCharge, currentTemp);
+   Particle.publish("hourly", data, PRIVATE);
+   return 1;
  }
 
  void LogDailyEvent() // Log Daily Event()
