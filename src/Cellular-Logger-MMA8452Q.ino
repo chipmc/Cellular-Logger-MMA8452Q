@@ -30,7 +30,7 @@
  #define VERSIONADDR 0x0             // Memory Locations By Name not Number
  #define SENSITIVITYADDR 0x1         // For the 1st Word locations
  #define DEBOUNCEADDR 0x2            // One byte for debounce (stored in cSec mult by 10 for mSec)
- #define MONTHLYREBOOTCOUNT 0x3      // This is where we store the reboots - indication of system health
+ #define MONTHLYRETRANSCOUNT 0x3     // This is where we store the retransmit counts
  #define DAILYPOINTERADDR 0x4        // One byte for daily pointer
  #define HOURLYPOINTERADDR 0x5       // Two bytes for hourly pointer
  #define CONTROLREGISTER 0x7         // This is the control register acted on by both Simblee and Arduino
@@ -82,7 +82,10 @@
  byte lastHour = 0;  // For recording the startup values
  byte lastDate = 0;   // These values make sure we record events if time has lapsed
  unsigned int hourlyPersonCount = 0;  // hourly counter
+ unsigned int hourlyPersonCountSent = 0;  // Person count in flight to Ubidots
  unsigned int dailyPersonCount = 0;   //  daily counter
+ unsigned int dailyPersonCountSent = 0; // Daily person count in flight to Ubidots
+ bool dataInFlight = false;     // Tracks if we have sent data but not yet cleared it from counts until we get confirmation
  byte currentHourlyPeriod;    // This is where we will know if the period changed
  byte currentDailyPeriod;     // We will keep daily counts as well as period counts
  int countTemp = 0;          // Will use this to see if we should display a day or hours counts
@@ -93,7 +96,7 @@
  //Menu and Program Variables
  unsigned long lastBump = 0;         // set the time of an event
  boolean ledState = LOW;                 // variable used to store the last LED status, to toggle the light
- int delaySleep = 1000;               // Wait until going back to sleep so we can enter commands
+ unsigned int delaySleep = 1000;               // Wait until going back to sleep so we can enter commands
  int menuChoice=0;                   // Menu Selection
  boolean refreshMenu = true;         //  Tells whether to write the menu
  boolean inTest = false;             // Are we in a test or not
@@ -102,6 +105,7 @@
  const char* releaseNumber = SOFTWARERELEASENUMBER;  // Displays the release on the menu
  byte bootcount = 0;                 // Counts reboots
  int bootCountAddr = 0;              // Address for Boot Count Number
+ String RSSIdescription = "";
 
 
  void setup()
@@ -115,6 +119,7 @@
 
      Particle.subscribe("hook-response/hourly", myHandler, MY_DEVICES);      // Subscribe to the integration response event
      Particle.subscribe("hook-response/daily", myHandler, MY_DEVICES);      // Subscribe to the integration response event
+     Particle.variable("RSSIdesc",RSSIdescription);
 
      pinMode(int2Pin,INPUT);            // accelerometer interrupt pinMode
      pinMode(blueLED, OUTPUT);           // declare the Red LED Pin as an output
@@ -309,6 +314,16 @@
        Serial.read();  // Clear the serial buffer
    }
    if (inTest == 1) {
+     if(hourlyPersonCountSent && !dataInFlight) {
+       Serial.print("Receipt confirmed so ");
+       Serial.print(hourlyPersonCount);
+       Serial.print(" minus ");
+       Serial.print(hourlyPersonCountSent);
+       Serial.print(" yeilds ");
+       hourlyPersonCount -= hourlyPersonCountSent;    // Confirmed that count was recevied - clearing
+       Serial.println(hourlyPersonCount);
+       hourlyPersonCountSent = 0;
+     }
      CheckForBump();
    }
  }
@@ -406,17 +421,18 @@
      FRAMwrite16(HOURLYPOINTERADDR,newHourlyPointerAddr);
      if (SendHourlyEvent())
      {
-       hourlyPersonCount = 0;               // Reset and increment the Person Count in the new period
+       hourlyPersonCountSent = hourlyPersonCount; // This is the number that was sent to Ubidots - will be subtracted once we get confirmation
+       dataInFlight = true; // set the data in flight flag
        currentHourlyPeriod = HOURLYPERIOD;  // Change the time period
-       Serial.println(F("Hourly Event Logged"));
+       Serial.println(F("Hourly Event Sent"));
      }
+     printSignalStrength();
  }
 
  bool SendHourlyEvent()
  {
    // Take the temperature and report to Ubidots - may set up custom webhooks later
    float currentTemp = getTemperature(0);  // 0 argument for degrees F
-   i=0;         // Reset the pointer for responses from Ubidots
    stateOfCharge = batteryMonitor.getSoC();
    String data = String::format("{\"hourly\":%i, \"daily\":%i,\"battery\":%.1f, \"temp\":%.1f}",hourlyPersonCount, dailyPersonCount, stateOfCharge, currentTemp);
    Particle.publish("hourly", data, PRIVATE);
@@ -434,7 +450,6 @@
      FRAMwrite8(pointer+DAILYBATTOFFSET,stateOfCharge);
      byte newDailyPointerAddr = (FRAMread8(DAILYPOINTERADDR)+1) % DAILYCOUNTNUMBER;  // This is where we "wrap" the count to stay in our memory space
      FRAMwrite8(DAILYPOINTERADDR,newDailyPointerAddr);
-     i=0;         // Reset the pointer for responses from Ubidots
      stateOfCharge = batteryMonitor.getSoC();
      String data = String::format("{\"daily\":%i, \"hourly\":%i, \"battery\":%.1f}",dailyPersonCount, hourlyPersonCount, stateOfCharge);
      Particle.publish("daily", data, PRIVATE);
@@ -463,22 +478,76 @@ void BlinkForever() // When something goes badly wrong...
 
 void myHandler(const char *event, const char *data)
 {
-  i++;
-  Serial.print(i);
+  if (!data) {              // First check to see if there is any data
+    Serial.print("No data returned from WebHook ");
+    Serial.println(event);
+    return;
+  }
   Serial.print(event);
-  Serial.print(", data: ");
-  if (data)
-    Serial.println(data);
-  else
-    Serial.println("NULL");
+  Serial.print(" returned ");
+  Serial.println(data);
+  String response = data;   // If there is data - copy it into a String variable
+  int datainResponse = response.indexOf("hourly") + 24; // Find the "hourly" field and add 24 to get to the value
+  String responseCodeString = response.substring(datainResponse,datainResponse+3);  // Trim all but the value
+  int responseCode = responseCodeString.toInt();  // Put this into an int for comparisons
+  switch (responseCode) {   // From the Ubidots API refernce https://ubidots.com/docs/api/#response-codes
+    case 200:
+      Serial.println("Request successfully completed");
+    case 201:
+      Serial.println("Successful request - new data point created");
+      dataInFlight = false;  // clear the data in flight flag
+      break;
+    case 400:
+      Serial.println("Bad request - check JSON body");
+      break;
+    case 403:
+      Serial.println("Forbidden token not valid");
+      break;
+    case 404:
+      Serial.println("Not found - verify variable and device ID");
+      break;
+    case 405:
+      Serial.println("Method not allowed for API endpoint chosen");
+      break;
+    case 501:
+      Serial.println("Internal error");
+      break;
+    default:
+      Serial.print("Ubidots Response Code: ");    // Non-listed code - generic response
+      Serial.println(responseCode);
+      break;
+  }
+
 }
 
 void printSignalStrength()
 {
   CellularSignal sig = Cellular.RSSI();  // Prototype for Cellular Signal Montoring
-  String s = String(sig.rssi) + String(",") + String(sig.qual);
+  int rssi = sig.rssi;
+  int strength = map(rssi, -131, -51, 0, 5);
   Serial.print("The signal strength is: ");
-  Serial.println(sig);
+  switch (strength)
+  {
+    case 0:
+      RSSIdescription = "Poor Signal";
+      break;
+    case 1:
+      RSSIdescription = "Low Signal";
+      break;
+    case 2:
+      RSSIdescription = "Medium Signal";
+      break;
+    case 3:
+      RSSIdescription = "Good Signal";
+      break;
+    case 4:
+      RSSIdescription = "Very Good Signal";
+      break;
+    case 5:
+      RSSIdescription = "Great Signal";
+      break;
+  }
+  Serial.println(RSSIdescription);
 }
 
 float getTemperature(bool degC)
