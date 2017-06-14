@@ -65,7 +65,7 @@
  const int tmp36Pin = A2;
 
  // Program Constants
-
+ int temperatureF;          // Global variable so we can monitor via cloud variable
 
 
  // Accelerometer Variables
@@ -116,11 +116,13 @@
      Particle.variable("RSSIdesc", RSSIdescription);
      Particle.variable("Sensitivity", accelSensitivity);
      Particle.variable("Debounce", debounce);
+     Particle.variable("Temperature",temperatureF);
      Particle.function("resetCounts", resetCounts);
      Particle.function("startStop", startStop);
      Particle.function("resetFRAM", resetFRAM);
      Particle.function("SetDebounce",setDebounce);
      Particle.function("SetSensivty", setSensivty);
+     Particle.function("SendNow",sendNow);
 
      pinMode(int2Pin,INPUT);            // accelerometer interrupt pinMode
      pinMode(blueLED, OUTPUT);           // declare the Red LED Pin as an output
@@ -637,8 +639,18 @@ int setSensivty(String command)  // Will accept a new debounce value in the form
   else return 0;
 }
 
+int sendNow(String command) // Function to force sending data in current hour
+{
+  if (command == "send")
+  {
+    LogHourlyEvent();
+    return 1;
+  }
+  else return 0;
+}
 
-float getTemperature(bool degC)
+
+ int getTemperature(bool degC)
 {
   //getting the voltage reading from the temperature sensor
   int reading = analogRead(tmp36Pin);
@@ -648,9 +660,9 @@ float getTemperature(bool degC)
   voltage /= 4096.0;        // This is different than the Arduino where there are only 1024 steps
 
   // now print out the temperature
-  float temperatureC = ((voltage - 0.5) * 100);  //converting from 10 mv per degree with 500 mV offset to degrees ((voltage - 500mV) times 100) - 5 degree calibration
+  int temperatureC = int(((voltage - 0.5) * 100));  //converting from 10 mv per degree with 500 mV offset to degrees ((voltage - 500mV) times 100) - 5 degree calibration
   // now convert to Fahrenheit
-  float temperatureF = (temperatureC * 9.0 / 5.0) + 32.0;
+  temperatureF = int((temperatureC * 9.0 / 5.0) + 32.0);
 
   if (degC)
   {
