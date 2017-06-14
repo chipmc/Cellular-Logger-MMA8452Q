@@ -65,45 +65,41 @@
  const int tmp36Pin = A2;
 
  // Program Constants
- const byte SCALE = 2;          // Sets full-scale range to +/-2, 4, or 8g. Used to calc real g values.
- byte Sensitivity = 0x01;       // Hex variable for sensitivity
+
 
 
  // Accelerometer Variables
  const byte accelFullScaleRange = 2;  // Sets full-scale range to +/-2, 4, or 8g. Used to calc real g values.
  const byte dataRate = 3;             // output data rate - 0=800Hz, 1=400, 2=200, 3=100, 4=50, 5=12.5, 6=6.25, 7=1.56
- byte accelInputValue = 1;            // Raw sensitivity input (0 least sensitive -9 most sensitive)
- byte accelThreshold = 100;           // accelThreshold value to decide when the detected sound is a knock or not
- unsigned int debounce;               // This is a minimum debounce value - additional debounce set using pot or remote terminal
+ byte Sensitivity;                    // Hex variable for sensitivity - Initialized in Setup (0 - most to 128 - least sensitive)
+ int accelSensitivity;                 // Raw sensitivity input - Initialized in Setup (0 least sensitive -9 most sensitive)
+ int debounce;                        // Debounce value is initialized in setup (debounce is divided by 10 to reduce FRAM storage)
 
  // FRAM and Unix time variables
  time_t t;
- byte lastHour = 0;  // For recording the startup values
- byte lastDate = 0;   // These values make sure we record events if time has lapsed
+ byte lastHour = 0;                   // For recording the startup values
+ byte lastDate = 0;                   // These values make sure we record events if time has lapsed
  unsigned int hourlyPersonCount = 0;  // hourly counter
  unsigned int hourlyPersonCountSent = 0;  // Person count in flight to Ubidots
  unsigned int dailyPersonCount = 0;   //  daily counter
  unsigned int dailyPersonCountSent = 0; // Daily person count in flight to Ubidots
- bool dataInFlight = false;     // Tracks if we have sent data but not yet cleared it from counts until we get confirmation
- byte currentHourlyPeriod;    // This is where we will know if the period changed
- byte currentDailyPeriod;     // We will keep daily counts as well as period counts
- int countTemp = 0;          // Will use this to see if we should display a day or hours counts
+ bool dataInFlight = false;           // Tracks if we have sent data but not yet cleared it from counts until we get confirmation
+ byte currentHourlyPeriod;            // This is where we will know if the period changed
+ byte currentDailyPeriod;             // We will keep daily counts as well as period counts
+ int countTemp = 0;                   // Will use this to see if we should display a day or hours counts
 
  // Battery monitor
  float stateOfCharge = 0;            // stores battery charge level value
 
  //Menu and Program Variables
  unsigned long lastBump = 0;         // set the time of an event
- boolean ledState = LOW;                 // variable used to store the last LED status, to toggle the light
- unsigned int delaySleep = 1000;               // Wait until going back to sleep so we can enter commands
+ boolean ledState = LOW;             // variable used to store the last LED status, to toggle the light
  int menuChoice=0;                   // Menu Selection
  boolean refreshMenu = true;         //  Tells whether to write the menu
  boolean inTest = false;             // Are we in a test or not
  int numberHourlyDataPoints;         // How many hourly counts are there
  int numberDailyDataPoints;          // How many daily counts are there
  const char* releaseNumber = SOFTWARERELEASENUMBER;  // Displays the release on the menu
- byte bootcount = 0;                 // Counts reboots
- int bootCountAddr = 0;              // Address for Boot Count Number
  String RSSIdescription = "";
 
 
@@ -123,6 +119,8 @@
      Particle.function("resetCounts", resetCounts);
      Particle.function("startStop", startStop);
      Particle.function("resetFRAM", resetFRAM);
+     Particle.function("SetDebounce",setDebounce);
+     Particle.function("SetSensivty", setSensivty);
 
      pinMode(int2Pin,INPUT);            // accelerometer interrupt pinMode
      pinMode(blueLED, OUTPUT);           // declare the Red LED Pin as an output
@@ -158,13 +156,12 @@
      Serial.println(accelSensitivity);
      Serial.print(F("Debounce set to: "));
      debounce = FRAMread8(DEBOUNCEADDR)*10;     // We mulitply by ten since debounce is stored in 100ths of a second
-     if (debounce > delaySleep) delaySleep = debounce;       // delaySleep must be bigger than debounce afterall
      Serial.println(debounce);
 
      byte c = readRegister(MMA8452_ADDRESS,0x0D);  // Read WHO_AM_I register for accelerometer
      if (c == 0x2A) // WHO_AM_I should always be 0x2A
      {
-         initMMA8452(SCALE, dataRate);  // init the accelerometer if communication is OK
+         initMMA8452(accelFullScaleRange, dataRate);  // init the accelerometer if communication is OK
          Serial.println(F("MMA8452Q is online..."));
      }
      else
@@ -173,10 +170,12 @@
          Serial.println(c, HEX);
          BlinkForever();
      }
-     initMMA8452(SCALE,dataRate);
+     initMMA8452(accelFullScaleRange,dataRate);
 
      Time.zone(-4);                   // Set time zone to Eastern USA daylight saving time
+     printSignalStrength();           // Test signal strength at startup
      StartStopTest(1);                // Default action is for the test to be running
+
  }
 
  void loop() {
@@ -230,11 +229,10 @@
                while (Serial.available() == 0) {  // Look for char in serial queue and process if found
                    continue;
                }
-               accelInputValue = (Serial.parseInt());
+               accelSensitivity = (Serial.parseInt());
                Serial.print(F("accelSensitivity set to: "));
-               Serial.println(accelInputValue);
-               accelSensitivity = 10-accelInputValue;
-               FRAMwrite8(SENSITIVITYADDR, accelSensitivity);
+               Serial.println(accelSensitivity);
+               FRAMwrite8(SENSITIVITYADDR, 10-accelSensitivity);
                initMMA8452(accelFullScaleRange, dataRate);  // init the accelerometer if communication is OK
                Serial.println(F(" MMA8452Q is online..."));
                break;
@@ -244,7 +242,6 @@
                    continue;
                }
                debounce = Serial.parseInt();
-               if (debounce > delaySleep) delaySleep = debounce;       // delaySleep must be bigger than debounce afterall
                Serial.print(F("Debounce set to: "));
                Serial.println(debounce);
                FRAMwrite8(DEBOUNCEADDR, debounce/10);     // Remember we store debounce in cSec
@@ -563,7 +560,7 @@ int resetCounts(String command)   // Will reset the local counts
     dailyPersonCount = 0;
     return 1;
   }
-  return 0;
+  else return 0;
 }
 
 int startStop(String command)   // Will reset the local counts
@@ -590,6 +587,56 @@ int resetFRAM(String command)   // Will reset the local counts
   }
   else return 0;
 }
+
+int setDebounce(String command)  // Will accept a new debounce value in the form "debounce:xxx" where xxx is an integer for delay in mSec
+{
+  String commandStr = command.substring(0,8);
+  unsigned int commandLen = command.length();
+  String valueStr = command.substring(9,commandLen);
+  Serial.print("Recevied call for setDebounce: ");
+  Serial.print(command);
+  Serial.print(" of length: ");
+  Serial.println(commandLen);
+  Serial.print("Broken into: ");
+  Serial.print(commandStr);
+  Serial.print(" , ");
+  Serial.println(valueStr);
+  if (commandStr == "debounce")
+  {
+    debounce = valueStr.toInt();
+    Serial.print("debounce set to:");
+    Serial.println(debounce);
+    return 1;
+  }
+  else return 0;
+}
+
+int setSensivty(String command)  // Will accept a new debounce value in the form "debounce:xxx" where xxx is an integer for delay in mSec
+{
+  String commandStr = command.substring(0,11);
+  unsigned int commandLen = command.length();
+  String valueStr = command.substring(12,commandLen);
+  Serial.print("Recevied call for setSensitivity: ");
+  Serial.print(command);
+  Serial.print(" of length: ");
+  Serial.println(commandLen);
+  Serial.print("Broken into: ");
+  Serial.print(commandStr);
+  Serial.print(" , ");
+  Serial.println(valueStr);
+  if (commandStr == "sensitivity")
+  {
+    accelSensitivity = valueStr.toInt();
+    Serial.print("sensitivity set to:");
+    Serial.println(accelSensitivity);
+    FRAMwrite8(SENSITIVITYADDR, 10-accelSensitivity);
+    initMMA8452(accelFullScaleRange, dataRate);  // init the accelerometer if communication is OK
+    Serial.println(F(" MMA8452Q is online..."));
+    return 1;
+  }
+  else return 0;
+}
+
 
 float getTemperature(bool degC)
 {

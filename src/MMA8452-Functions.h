@@ -6,7 +6,7 @@
 // Feel free to modify any values, these are settings that work well for me.
 
 // Variables unique to this Header
-byte accelSensitivity;               // Hex variable for sensitivity
+//byte accelSensitivity;               // Hex variable for sensitivity
 
 
 
@@ -64,6 +64,7 @@ void MMA8452Active()
 
 void initMMA8452(byte fsr, byte dataRate)
 {
+  byte setSensitivity = FRAMread8(10-SENSITIVITYADDR);
   MMA8452Standby();  // Must be in standby to change registers
   // Set up the full scale range to 2, 4, or 8g.
   if ((fsr==2)||(fsr==4)||(fsr==8))
@@ -83,9 +84,9 @@ void initMMA8452(byte fsr, byte dataRate)
    5. Set the second pulse window - maximum allowed time between end of latency and start of second pulse
    for more info check out this app note: http://www.nxp.com/assets/documents/data/en/application-notes/AN4072.pdf */
   writeRegister(MMA8452_ADDRESS, 0x21, 0x55);           // 1. single taps only on all axes
-  writeRegister(MMA8452_ADDRESS, 0x23, accelSensitivity);    // 2. x thresh at 2g (0x20), multiply the value by 0.0625g/LSB to get the threshold
-  writeRegister(MMA8452_ADDRESS, 0x24, accelSensitivity);    // 2. y thresh at 2g (0x20), multiply the value by 0.0625g/LSB to get the threshold
-  writeRegister(MMA8452_ADDRESS, 0x25, accelSensitivity);    // 2. z thresh at .5g (0x08), multiply the value by 0.0625g/LSB to get the threshold
+  writeRegister(MMA8452_ADDRESS, 0x23, setSensitivity);    // 2. x thresh at 2g (0x20), multiply the value by 0.0625g/LSB to get the threshold
+  writeRegister(MMA8452_ADDRESS, 0x24, setSensitivity);    // 2. y thresh at 2g (0x20), multiply the value by 0.0625g/LSB to get the threshold
+  writeRegister(MMA8452_ADDRESS, 0x25, setSensitivity);    // 2. z thresh at .5g (0x08), multiply the value by 0.0625g/LSB to get the threshold
   writeRegister(MMA8452_ADDRESS, 0x26, 0xFF);           // 3. Max time limit as this is very dependent on data rate, see the app note
   writeRegister(MMA8452_ADDRESS, 0x27, 0x64);           // 4. 1000ms (at 100Hz odr, Normal, and LPF Disabled) between taps min, this also depends on the data rate
   writeRegister(MMA8452_ADDRESS, 0x28, 0xFF);           // 5. Mmax value between taps max
