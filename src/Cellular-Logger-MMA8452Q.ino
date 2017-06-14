@@ -45,7 +45,7 @@
  #define HOURLYCOUNTOFFSET 4         // Offsets for the values in the hourly words
  #define HOURLYBATTOFFSET 6          // Where the hourly battery charge is stored
  // Finally, here are the variables I want to change often and pull them all together here
- #define SOFTWARERELEASENUMBER "0.1"
+ #define SOFTWARERELEASENUMBER "0.5"
  #define PARKCLOSES 19
  #define PARKOPENS 7
 
@@ -66,14 +66,13 @@
 
  // Program Constants
  const byte SCALE = 2;          // Sets full-scale range to +/-2, 4, or 8g. Used to calc real g values.
- int InputValue = 0;            // Raw sensitivity input
  byte Sensitivity = 0x01;       // Hex variable for sensitivity
- int i=0;     // For stepping through responses in myHandler
+
 
  // Accelerometer Variables
  const byte accelFullScaleRange = 2;  // Sets full-scale range to +/-2, 4, or 8g. Used to calc real g values.
  const byte dataRate = 3;             // output data rate - 0=800Hz, 1=400, 2=200, 3=100, 4=50, 5=12.5, 6=6.25, 7=1.56
- byte accelInputValue = 1;            // Raw sensitivity input (0-9);
+ byte accelInputValue = 1;            // Raw sensitivity input (0 least sensitive -9 most sensitive)
  byte accelThreshold = 100;           // accelThreshold value to decide when the detected sound is a knock or not
  unsigned int debounce;               // This is a minimum debounce value - additional debounce set using pot or remote terminal
 
@@ -112,14 +111,18 @@
  {
      Serial.begin(9600);
      Wire.begin();                       //Create a Wire object
-
      Serial.println("");                 // Header information
      Serial.print(F("Cellular-Logger-MMA8452Q - release "));
      Serial.println(releaseNumber);
 
      Particle.subscribe("hook-response/hourly", myHandler, MY_DEVICES);      // Subscribe to the integration response event
      Particle.subscribe("hook-response/daily", myHandler, MY_DEVICES);      // Subscribe to the integration response event
-     Particle.variable("RSSIdesc",RSSIdescription);
+     Particle.variable("RSSIdesc", RSSIdescription);
+     Particle.variable("Sensitivity", accelSensitivity);
+     Particle.variable("Debounce", debounce);
+     Particle.function("resetCounts", resetCounts);
+     Particle.function("startStop", startStop);
+     Particle.function("resetFRAM", resetFRAM);
 
      pinMode(int2Pin,INPUT);            // accelerometer interrupt pinMode
      pinMode(blueLED, OUTPUT);           // declare the Red LED Pin as an output
@@ -233,8 +236,6 @@
                accelSensitivity = 10-accelInputValue;
                FRAMwrite8(SENSITIVITYADDR, accelSensitivity);
                initMMA8452(accelFullScaleRange, dataRate);  // init the accelerometer if communication is OK
-               Serial.print(F("Accelsensitivity = "));
-               Serial.print(accelSensitivity);
                Serial.println(F(" MMA8452Q is online..."));
                break;
            case '4':  // Change the debounce value
@@ -254,7 +255,6 @@
                FRAMwrite16(CURRENTHOURLYCOUNTADDR, 0);  // Reset Hourly Count in memory
                hourlyPersonCount = 0;
                dailyPersonCount = 0;
-               Serial.println(F("Resetting Counters"));
                break;
            case '6': // Reset FRAM Memory
                ResetFRAM();
@@ -550,6 +550,47 @@ void printSignalStrength()
   Serial.println(RSSIdescription);
 }
 
+int resetCounts(String command)   // Will reset the local counts
+{
+  if (command == "reset")
+  {
+    Serial.println(F("Counter Reset!"));
+    FRAMwrite16(CURRENTDAILYCOUNTADDR, 0);   // Reset Daily Count in memory
+    FRAMwrite16(CURRENTHOURLYCOUNTADDR, 0);  // Reset Hourly Count in memory
+    hourlyPersonCount = 0;
+    hourlyPersonCountSent = 0;                // In the off-chance there is data in flight
+    dataInFlight = false;
+    dailyPersonCount = 0;
+    return 1;
+  }
+  return 0;
+}
+
+int startStop(String command)   // Will reset the local counts
+{
+  if (command == "start" && inTest == 0)
+  {
+    StartStopTest(1);
+    return 1;
+  }
+  else if (command == "stop" && inTest == 1)
+  {
+    StartStopTest(0);
+    return 1;
+  }
+  else return 0;
+}
+
+int resetFRAM(String command)   // Will reset the local counts
+{
+  if (command == "reset")
+  {
+    ResetFRAM();
+    return 1;
+  }
+  else return 0;
+}
+
 float getTemperature(bool degC)
 {
   //getting the voltage reading from the temperature sensor
@@ -560,7 +601,7 @@ float getTemperature(bool degC)
   voltage /= 4096.0;        // This is different than the Arduino where there are only 1024 steps
 
   // now print out the temperature
-  float temperatureC = ((voltage - 0.5) * 100) - 5 ;  //converting from 10 mv per degree with 500 mV offset to degrees ((voltage - 500mV) times 100) - 5 degree calibration
+  float temperatureC = ((voltage - 0.5) * 100);  //converting from 10 mv per degree with 500 mV offset to degrees ((voltage - 500mV) times 100) - 5 degree calibration
   // now convert to Fahrenheit
   float temperatureF = (temperatureC * 9.0 / 5.0) + 32.0;
 
