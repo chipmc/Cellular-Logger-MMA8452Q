@@ -30,7 +30,7 @@
  #define VERSIONADDR 0x0             // Memory Locations By Name not Number
  #define SENSITIVITYADDR 0x1         // For the 1st Word locations
  #define DEBOUNCEADDR 0x2            // One byte for debounce (stored in cSec mult by 10 for mSec)
- #define MONTHLYRETRANSCOUNT 0x3     // This is where we store the retransmit counts
+ #define RESETCOUNT 0x3              // This is where we keep track of how often the Electron was reset
  #define DAILYPOINTERADDR 0x4        // One byte for daily pointer
  #define HOURLYPOINTERADDR 0x5       // Two bytes for hourly pointer
  #define CONTROLREGISTER 0x7         // This is the control register acted on by both Simblee and Arduino
@@ -62,11 +62,13 @@
  // Pin Constants
  const int int2Pin = D2;
  const int blueLED = D7;
- const int tmp36Pin = A2;
+ const int tmp36Pin = A0;
+ const int tmp36Shutdwn = B5;
+ const int done = D6;
 
- // Program Constants
+ // Program Variables
  int temperatureF;          // Global variable so we can monitor via cloud variable
-
+ int resetCount;
 
  // Accelerometer Variables
  const byte accelFullScaleRange = 2;  // Sets full-scale range to +/-2, 4, or 8g. Used to calc real g values.
@@ -89,7 +91,7 @@
  int countTemp = 0;                   // Will use this to see if we should display a day or hours counts
 
  // Battery monitor
- float stateOfCharge = 0;            // stores battery charge level value
+ int stateOfCharge = 0;            // stores battery charge level value
 
  //Menu and Program Variables
  unsigned long lastBump = 0;         // set the time of an event
@@ -114,9 +116,11 @@
      Particle.subscribe("hook-response/hourly", myHandler, MY_DEVICES);      // Subscribe to the integration response event
      Particle.subscribe("hook-response/daily", myHandler, MY_DEVICES);      // Subscribe to the integration response event
      Particle.variable("RSSIdesc", RSSIdescription);
+     Particle.variable("ResetCount", resetCounts);
      Particle.variable("Sensitivity", accelSensitivity);
      Particle.variable("Debounce", debounce);
      Particle.variable("Temperature",temperatureF);
+     Particle.variable("stateOfChg", stateOfCharge);
      Particle.function("resetCounts", resetCounts);
      Particle.function("startStop", startStop);
      Particle.function("resetFRAM", resetFRAM);
@@ -124,8 +128,19 @@
      Particle.function("SetSensivty", setSensivty);
      Particle.function("SendNow",sendNow);
 
+     System.on(reset, reset_handler);  // Need to keep track of resets
+     Serial.print("Reset count: ");
+     resetCount = FRAMread8(RESETCOUNT);
+     Serial.println(resetCount);
+
      pinMode(int2Pin,INPUT);            // accelerometer interrupt pinMode
      pinMode(blueLED, OUTPUT);           // declare the Red LED Pin as an output
+     pinMode(tmp36Shutdwn,OUTPUT);      // Supports shutting down the TMP-36 to save juice
+     digitalWrite(tmp36Shutdwn, HIGH);  // Turns on the temp sensor
+     pinMode(done,OUTPUT);       // Allows us to pet the watchdog
+     digitalWrite(done,LOW);      // Reset the watchdog timer
+     NonBlockingDelay(50);        // Watchdog timer resets when done transitions from lot to high;
+     digitalWrite(done,HIGH);     // Leave it high for the next cycle
 
      if (fram.begin()) {                // you can stick the new i2c addr in here, e.g. begin(0x51);
          Serial.println(F("Found I2C FRAM"));
@@ -205,7 +220,9 @@
                Serial.print(F("Current Time:"));
                t = Time.now();
                Serial.println(Time.timeStr(t)); // Prints time t - example: Wed May 21 01:08:47 2014  // Give and take the bus are in this function as it gets the current time
-               stateOfCharge = batteryMonitor.getSoC();
+               Serial.print("Reset count: ");
+               Serial.println(FRAMread8(RESETCOUNT));
+               stateOfCharge = int(batteryMonitor.getSoC());
                Serial.print(F("State of charge: "));
                Serial.print(stateOfCharge);
                Serial.println(F("%"));
@@ -414,7 +431,7 @@
      LogTime -= (60*Time.minute(LogTime) + Time.second(LogTime)); // So, we need to subtract the minutes and seconds needed to take to the top of the hour
      FRAMwrite32(pointer, LogTime);   // Write to FRAM - this is the end of the period
      FRAMwrite16(pointer+HOURLYCOUNTOFFSET,hourlyPersonCount);
-     stateOfCharge = batteryMonitor.getSoC();
+     stateOfCharge = int(batteryMonitor.getSoC());
      FRAMwrite8(pointer+HOURLYBATTOFFSET,stateOfCharge);
      unsigned int newHourlyPointerAddr = (FRAMread16(HOURLYPOINTERADDR)+1) % HOURLYCOUNTNUMBER;  // This is where we "wrap" the count to stay in our memory space
      FRAMwrite16(HOURLYPOINTERADDR,newHourlyPointerAddr);
@@ -431,9 +448,9 @@
  bool SendHourlyEvent()
  {
    // Take the temperature and report to Ubidots - may set up custom webhooks later
-   float currentTemp = getTemperature(0);  // 0 argument for degrees F
-   stateOfCharge = batteryMonitor.getSoC();
-   String data = String::format("{\"hourly\":%i, \"daily\":%i,\"battery\":%.1f, \"temp\":%.1f}",hourlyPersonCount, dailyPersonCount, stateOfCharge, currentTemp);
+   int currentTemp = getTemperature(0);  // 0 argument for degrees F
+   stateOfCharge = int(batteryMonitor.getSoC());
+   String data = String::format("{\"hourly\":%i, \"daily\":%i,\"battery\":%i, \"temp\":%i}",hourlyPersonCount, dailyPersonCount, stateOfCharge, currentTemp);
    Particle.publish("hourly", data, PRIVATE);
    return 1;
  }
@@ -492,9 +509,19 @@ void myHandler(const char *event, const char *data)
   switch (responseCode) {   // From the Ubidots API refernce https://ubidots.com/docs/api/#response-codes
     case 200:
       Serial.println("Request successfully completed");
+      /*digitalWrite(done,LOW);      // Reset the watchdog timer
+      NonBlockingDelay(50);        // Watchdog timer resets when done transitions from lot to high;
+      digitalWrite(done,HIGH);     // Leave it high for the next cycle
+      */
+      break;
     case 201:
       Serial.println("Successful request - new data point created");
       dataInFlight = false;  // clear the data in flight flag
+      /*
+      digitalWrite(done,LOW);      // Reset the watchdog timer
+      NonBlockingDelay(50);        // Watchdog timer resets when done transitions from lot to high;
+      digitalWrite(done,HIGH);     // Leave it high for the next cycle
+      */
       break;
     case 400:
       Serial.println("Bad request - check JSON body");
@@ -567,17 +594,22 @@ int resetCounts(String command)   // Will reset the local counts
 
 int startStop(String command)   // Will reset the local counts
 {
-  if (command == "start" && inTest == 0)
+  if (command == "start" && !inTest)
   {
     StartStopTest(1);
     return 1;
   }
-  else if (command == "stop" && inTest == 1)
+  else if (command == "stop" && inTest)
   {
     StartStopTest(0);
     return 1;
   }
-  else return 0;
+  else
+  {
+    Serial.print("Got here but did not work: ");
+    Serial.println(command);
+    return 0;
+  }
 }
 
 int resetFRAM(String command)   // Will reset the local counts
@@ -608,6 +640,7 @@ int setDebounce(String command)  // Will accept a new debounce value in the form
     debounce = valueStr.toInt();
     Serial.print("debounce set to:");
     Serial.println(debounce);
+    FRAMwrite8(DEBOUNCEADDR, debounce/10);     // Remember we store debounce in cSec
     return 1;
   }
   else return 0;
@@ -672,4 +705,11 @@ int sendNow(String command) // Function to force sending data in current hour
   {
       return temperatureF;
   }
+}
+
+void reset_handler()
+{
+  resetCount++;
+  FRAMwrite8(RESETCOUNT,resetCount);
+  Particle.publish("reset", "going down for reboot NOW!");
 }
