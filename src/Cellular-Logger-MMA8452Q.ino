@@ -56,7 +56,7 @@
  #include "MMA8452-Functions.h"  // Adds the accelerometer functions
 
  // Prototypes
-
+ STARTUP(System.enableFeature(FEATURE_RESET_INFO));
  FuelGauge batteryMonitor;      // Prorotype for the fuel gauge (included in Particle core library)
 
  // Pin Constants
@@ -116,22 +116,16 @@
      Particle.subscribe("hook-response/hourly", myHandler, MY_DEVICES);      // Subscribe to the integration response event
      Particle.subscribe("hook-response/daily", myHandler, MY_DEVICES);      // Subscribe to the integration response event
      Particle.variable("RSSIdesc", RSSIdescription);
-     Particle.variable("ResetCount", resetCounts);
+     Particle.variable("ResetCount", resetCount);
      Particle.variable("Sensitivity", accelSensitivity);
      Particle.variable("Debounce", debounce);
      Particle.variable("Temperature",temperatureF);
      Particle.variable("stateOfChg", stateOfCharge);
-     Particle.function("resetCounts", resetCounts);
      Particle.function("startStop", startStop);
      Particle.function("resetFRAM", resetFRAM);
      Particle.function("SetDebounce",setDebounce);
      Particle.function("SetSensivty", setSensivty);
      Particle.function("SendNow",sendNow);
-
-     System.on(reset, reset_handler);  // Need to keep track of resets
-     Serial.print("Reset count: ");
-     resetCount = FRAMread8(RESETCOUNT);
-     Serial.println(resetCount);
 
      pinMode(int2Pin,INPUT);            // accelerometer interrupt pinMode
      pinMode(blueLED, OUTPUT);           // declare the Red LED Pin as an output
@@ -166,6 +160,15 @@
           BlinkForever();
       }
     }
+
+    resetCount = FRAMread8(RESETCOUNT);       // Retrive system recount data from FRAMwrite8
+    if (System.resetReason() == RESET_REASON_PIN_RESET)  // Check to see if we are starting from a pin reset
+    {
+      resetCount++;
+      FRAMwrite8(RESETCOUNT,resetCount);    // If so, store incremented number - watchdog must have done This
+    }
+    Serial.print("Reset count: ");
+    Serial.println(resetCount);
 
      // Import the accelSensitivity and Debounce values from memory
      Serial.print(F("Sensitivity set to: "));
@@ -509,19 +512,16 @@ void myHandler(const char *event, const char *data)
   switch (responseCode) {   // From the Ubidots API refernce https://ubidots.com/docs/api/#response-codes
     case 200:
       Serial.println("Request successfully completed");
-      /*digitalWrite(done,LOW);      // Reset the watchdog timer
-      NonBlockingDelay(50);        // Watchdog timer resets when done transitions from lot to high;
+      digitalWrite(done,LOW);      // Reset the watchdog timer
+      NonBlockingDelay(30);        // Watchdog timer resets when done transitions from lot to high;
       digitalWrite(done,HIGH);     // Leave it high for the next cycle
-      */
       break;
     case 201:
       Serial.println("Successful request - new data point created");
       dataInFlight = false;  // clear the data in flight flag
-      /*
       digitalWrite(done,LOW);      // Reset the watchdog timer
-      NonBlockingDelay(50);        // Watchdog timer resets when done transitions from lot to high;
+      NonBlockingDelay(30);        // Watchdog timer resets when done transitions from lot to high;
       digitalWrite(done,HIGH);     // Leave it high for the next cycle
-      */
       break;
     case 400:
       Serial.println("Bad request - check JSON body");
@@ -705,11 +705,4 @@ int sendNow(String command) // Function to force sending data in current hour
   {
       return temperatureF;
   }
-}
-
-void reset_handler()
-{
-  resetCount++;
-  FRAMwrite8(RESETCOUNT,resetCount);
-  Particle.publish("reset", "going down for reboot NOW!");
 }
