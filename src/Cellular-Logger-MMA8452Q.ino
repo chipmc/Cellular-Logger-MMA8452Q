@@ -64,11 +64,14 @@
  const int blueLED = D7;
  const int tmp36Pin = A0;
  const int tmp36Shutdwn = B5;
- const int done = D6;
+ const int donePin = D6;
+ const int wakeUpPin = A7;    // This is the Particle Electron WKP pin
 
  // Program Variables
  int temperatureF;          // Global variable so we can monitor via cloud variable
- int resetCount;
+ int resetCount;            // Counts the number of times the Electron has had a pin reset
+ volatile bool watchdogPet = false; // keeps track of when we have pet the watchdog
+ volatile bool doneEnabled = true;  // This enables petting the watchdog
 
  // Accelerometer Variables
  const byte accelFullScaleRange = 2;  // Sets full-scale range to +/-2, 4, or 8g. Used to calc real g values.
@@ -107,94 +110,94 @@
 
  void setup()
  {
-     Serial.begin(9600);
-     Wire.begin();                       //Create a Wire object
-     Serial.println("");                 // Header information
-     Serial.print(F("Cellular-Logger-MMA8452Q - release "));
-     Serial.println(releaseNumber);
+   Serial.begin(9600);
+   Wire.begin();                       //Create a Wire object
+   Serial.println("");                 // Header information
+   Serial.print(F("Cellular-Logger-MMA8452Q - release "));
+   Serial.println(releaseNumber);
 
-     Particle.subscribe("hook-response/hourly", myHandler, MY_DEVICES);      // Subscribe to the integration response event
-     Particle.subscribe("hook-response/daily", myHandler, MY_DEVICES);      // Subscribe to the integration response event
-     Particle.variable("RSSIdesc", RSSIdescription);
-     Particle.variable("ResetCount", resetCount);
-     Particle.variable("Sensitivity", accelSensitivity);
-     Particle.variable("Debounce", debounce);
-     Particle.variable("Temperature",temperatureF);
-     Particle.variable("stateOfChg", stateOfCharge);
-     Particle.function("startStop", startStop);
-     Particle.function("resetFRAM", resetFRAM);
-     Particle.function("SetDebounce",setDebounce);
-     Particle.function("SetSensivty", setSensivty);
-     Particle.function("SendNow",sendNow);
+   pinMode(donePin,OUTPUT);       // Allows us to pet the watchdog
+   attachInterrupt(wakeUpPin, watchdogISR, RISING);   // The watchdog timer will signal us and we have to respond
 
-     pinMode(int2Pin,INPUT);            // accelerometer interrupt pinMode
-     pinMode(blueLED, OUTPUT);           // declare the Red LED Pin as an output
-     pinMode(tmp36Shutdwn,OUTPUT);      // Supports shutting down the TMP-36 to save juice
-     digitalWrite(tmp36Shutdwn, HIGH);  // Turns on the temp sensor
-     pinMode(done,OUTPUT);       // Allows us to pet the watchdog
-     digitalWrite(done,LOW);      // Reset the watchdog timer
-     NonBlockingDelay(50);        // Watchdog timer resets when done transitions from lot to high;
-     digitalWrite(done,HIGH);     // Leave it high for the next cycle
+   pinMode(wakeUpPin,INPUT_PULLDOWN);   // This pin is active HIGH
+   pinMode(int2Pin,INPUT);            // accelerometer interrupt pinMode
+   pinMode(blueLED, OUTPUT);           // declare the Red LED Pin as an output
+   pinMode(tmp36Shutdwn,OUTPUT);      // Supports shutting down the TMP-36 to save juice
+   digitalWrite(tmp36Shutdwn, HIGH);  // Turns on the temp sensor
 
-     if (fram.begin()) {                // you can stick the new i2c addr in here, e.g. begin(0x51);
-         Serial.println(F("Found I2C FRAM"));
-     } else {
-         Serial.println(F("No I2C FRAM found ... check your connections"));
-     }
+   Particle.subscribe("hook-response/hourly", myHandler, MY_DEVICES);      // Subscribe to the integration response event
+   Particle.subscribe("hook-response/daily", myHandler, MY_DEVICES);      // Subscribe to the integration response event
+   Particle.variable("RSSIdesc", RSSIdescription);
+   Particle.variable("ResetCount", resetCount);
+   Particle.variable("Sensitivity", accelSensitivity);
+   Particle.variable("Debounce", debounce);
+   Particle.variable("Temperature",temperatureF);
+   Particle.variable("stateOfChg", stateOfCharge);
+   Particle.function("startStop", startStop);
+   Particle.function("resetFRAM", resetFRAM);
+   Particle.function("SetDebounce",setDebounce);
+   Particle.function("SetSensivty", setSensivty);
+   Particle.function("SendNow",sendNow);
 
-    if (FRAMread8(VERSIONADDR) != VERSIONNUMBER) {  // Check to see if the memory map in the sketch matches the data on the chip
-      Serial.print(F("FRAM Version Number: "));
-      Serial.println(FRAMread8(VERSIONADDR));
-      Serial.read();
-      Serial.println(F("Memory/Sketch mismatch! Erase FRAM? (Y/N)"));
-      while (!Serial.available());
-      switch (Serial.read()) {    // Give option to erase and reset memory
-        case 'Y':
-          ResetFRAM();
-          break;
-        case 'y':
-          ResetFRAM();
-          break;
-        default:
-          Serial.println(F("Cannot proceed"));
-          BlinkForever();
-      }
+   if (fram.begin()) {                // you can stick the new i2c addr in here, e.g. begin(0x51);
+       Serial.println(F("Found I2C FRAM"));
+   } else {
+       Serial.println(F("No I2C FRAM found ... check your connections"));
+   }
+
+  if (FRAMread8(VERSIONADDR) != VERSIONNUMBER) {  // Check to see if the memory map in the sketch matches the data on the chip
+    Serial.print(F("FRAM Version Number: "));
+    Serial.println(FRAMread8(VERSIONADDR));
+    Serial.read();
+    Serial.println(F("Memory/Sketch mismatch! Erase FRAM? (Y/N)"));
+    while (!Serial.available());
+    switch (Serial.read()) {    // Give option to erase and reset memory
+      case 'Y':
+        ResetFRAM();
+        break;
+      case 'y':
+        ResetFRAM();
+        break;
+      default:
+        Serial.println(F("Cannot proceed"));
+        BlinkForever();
     }
+  }
 
-    resetCount = FRAMread8(RESETCOUNT);       // Retrive system recount data from FRAMwrite8
-    if (System.resetReason() == RESET_REASON_PIN_RESET)  // Check to see if we are starting from a pin reset
-    {
-      resetCount++;
-      FRAMwrite8(RESETCOUNT,resetCount);    // If so, store incremented number - watchdog must have done This
-    }
-    Serial.print("Reset count: ");
-    Serial.println(resetCount);
+  resetCount = FRAMread8(RESETCOUNT);       // Retrive system recount data from FRAMwrite8
+  if (System.resetReason() == RESET_REASON_PIN_RESET)  // Check to see if we are starting from a pin reset
+  {
+    resetCount++;
+    FRAMwrite8(RESETCOUNT,resetCount);    // If so, store incremented number - watchdog must have done This
+  }
+  Serial.print("Reset count: ");
+  Serial.println(resetCount);
 
-     // Import the accelSensitivity and Debounce values from memory
-     Serial.print(F("Sensitivity set to: "));
-     accelSensitivity = FRAMread8(10-SENSITIVITYADDR);
-     Serial.println(accelSensitivity);
-     Serial.print(F("Debounce set to: "));
-     debounce = FRAMread8(DEBOUNCEADDR)*10;     // We mulitply by ten since debounce is stored in 100ths of a second
-     Serial.println(debounce);
+   // Import the accelSensitivity and Debounce values from memory
+   Serial.print(F("Sensitivity set to: "));
+   accelSensitivity = 10-FRAMread8(SENSITIVITYADDR);
+   Serial.println(accelSensitivity);
+   Serial.print(F("Debounce set to: "));
+   debounce = FRAMread8(DEBOUNCEADDR)*10;     // We mulitply by ten since debounce is stored in 100ths of a second
+   Serial.println(debounce);
 
-     byte c = readRegister(MMA8452_ADDRESS,0x0D);  // Read WHO_AM_I register for accelerometer
-     if (c == 0x2A) // WHO_AM_I should always be 0x2A
-     {
-         initMMA8452(accelFullScaleRange, dataRate);  // init the accelerometer if communication is OK
-         Serial.println(F("MMA8452Q is online..."));
-     }
-     else
-     {
-         Serial.print(F("Could not connect to MMA8452Q: 0x"));
-         Serial.println(c, HEX);
-         BlinkForever();
-     }
-     initMMA8452(accelFullScaleRange,dataRate);
+   byte c = readRegister(MMA8452_ADDRESS,0x0D);  // Read WHO_AM_I register for accelerometer
+   if (c == 0x2A) // WHO_AM_I should always be 0x2A
+   {
+       initMMA8452(accelFullScaleRange, dataRate);  // init the accelerometer if communication is OK
+       Serial.println(F("MMA8452Q is online..."));
+   }
+   else
+   {
+       Serial.print(F("Could not connect to MMA8452Q: 0x"));
+       Serial.println(c, HEX);
+       BlinkForever();
+   }
+   initMMA8452(accelFullScaleRange,dataRate);
 
-     Time.zone(-4);                   // Set time zone to Eastern USA daylight saving time
-     printSignalStrength();           // Test signal strength at startup
-     StartStopTest(1);                // Default action is for the test to be running
+   Time.zone(-4);                   // Set time zone to Eastern USA daylight saving time
+   printSignalStrength();           // Test signal strength at startup
+   StartStopTest(1);                // Default action is for the test to be running
 
  }
 
@@ -242,7 +245,7 @@
                Serial.print(getTemperature(0)); // Returns temp in F
                Serial.println(" degrees F");
                Serial.println("Sending to Ubidots via Webhook");
-               SendHourlyEvent();
+               SendEvent(1);  // Send as an hourly event
                break;
            case '2':     // Set the time zone - to be implemented
                break;
@@ -345,6 +348,11 @@
      }
      CheckForBump();
    }
+   if (watchdogPet)
+   {
+     Serial.println("We have pet the watchdog");
+     watchdogPet = false;
+   }
  }
 
  void CheckForBump() // This is where we check to see if an interrupt is set when not asleep or act on a tap that woke the Arduino
@@ -438,7 +446,7 @@
      FRAMwrite8(pointer+HOURLYBATTOFFSET,stateOfCharge);
      unsigned int newHourlyPointerAddr = (FRAMread16(HOURLYPOINTERADDR)+1) % HOURLYCOUNTNUMBER;  // This is where we "wrap" the count to stay in our memory space
      FRAMwrite16(HOURLYPOINTERADDR,newHourlyPointerAddr);
-     if (SendHourlyEvent())
+     if (SendEvent(1))
      {
        hourlyPersonCountSent = hourlyPersonCount; // This is the number that was sent to Ubidots - will be subtracted once we get confirmation
        dataInFlight = true; // set the data in flight flag
@@ -448,13 +456,18 @@
      printSignalStrength();
  }
 
- bool SendHourlyEvent()
+ bool SendEvent(bool hourlyEvent)
  {
    // Take the temperature and report to Ubidots - may set up custom webhooks later
+   digitalWrite(donePin, HIGH);
+   digitalWrite(donePin,LOW);     // Pet the dog so we have a full period for a response
+   doneEnabled = false;           // Can't pet the dog unless we get a confirmation via Webhook Response and the right Ubidots code.
+   Serial.println("Watchdog petting disabled");
    int currentTemp = getTemperature(0);  // 0 argument for degrees F
    stateOfCharge = int(batteryMonitor.getSoC());
    String data = String::format("{\"hourly\":%i, \"daily\":%i,\"battery\":%i, \"temp\":%i}",hourlyPersonCount, dailyPersonCount, stateOfCharge, currentTemp);
-   Particle.publish("hourly", data, PRIVATE);
+   if (hourlyEvent) Particle.publish("hourly", data, PRIVATE);
+   else Particle.publish("daily", data, PRIVATE);
    return 1;
  }
 
@@ -469,12 +482,12 @@
      FRAMwrite8(pointer+DAILYBATTOFFSET,stateOfCharge);
      byte newDailyPointerAddr = (FRAMread8(DAILYPOINTERADDR)+1) % DAILYCOUNTNUMBER;  // This is where we "wrap" the count to stay in our memory space
      FRAMwrite8(DAILYPOINTERADDR,newDailyPointerAddr);
-     stateOfCharge = batteryMonitor.getSoC();
-     String data = String::format("{\"daily\":%i, \"hourly\":%i, \"battery\":%.1f}",dailyPersonCount, hourlyPersonCount, stateOfCharge);
-     Particle.publish("daily", data, PRIVATE);
-     dailyPersonCount = 0;    // Reset and increment the Person Count in the new period
-     currentDailyPeriod = DAILYPERIOD;  // Change the time period
-     Serial.println(F("Logged a Daily Event"));
+     if (SendEvent(0))
+     {
+       dailyPersonCount = 0;    // Reset and increment the Person Count in the new period
+       currentDailyPeriod = DAILYPERIOD;  // Change the time period
+       Serial.println(F("Daily Event Sent"));
+     }
  }
 
 void NonBlockingDelay(int millisDelay)  // Used for a non-blocking delay
@@ -512,16 +525,16 @@ void myHandler(const char *event, const char *data)
   switch (responseCode) {   // From the Ubidots API refernce https://ubidots.com/docs/api/#response-codes
     case 200:
       Serial.println("Request successfully completed");
-      digitalWrite(done,LOW);      // Reset the watchdog timer
-      NonBlockingDelay(30);        // Watchdog timer resets when done transitions from lot to high;
-      digitalWrite(done,HIGH);     // Leave it high for the next cycle
+      doneEnabled = true;   // Successful response - can pet the dog again
+      digitalWrite(donePin, HIGH);  // If an interrupt came in while petting disabled, we missed it so...
+      digitalWrite(donePin, LOW);   // will pet the fdog just to be safe
       break;
     case 201:
       Serial.println("Successful request - new data point created");
       dataInFlight = false;  // clear the data in flight flag
-      digitalWrite(done,LOW);      // Reset the watchdog timer
-      NonBlockingDelay(30);        // Watchdog timer resets when done transitions from lot to high;
-      digitalWrite(done,HIGH);     // Leave it high for the next cycle
+      doneEnabled = true;   // Successful response - can pet the dog again
+      digitalWrite(donePin, HIGH);  // If an interrupt came in while petting disabled, we missed it so...
+      digitalWrite(donePin, LOW);   // will pet the fdog just to be safe
       break;
     case 400:
       Serial.println("Bad request - check JSON body");
@@ -704,5 +717,15 @@ int sendNow(String command) // Function to force sending data in current hour
   else
   {
       return temperatureF;
+  }
+}
+
+void watchdogISR()
+{
+  if (doneEnabled)
+  {
+    digitalWrite(donePin, HIGH);
+    digitalWrite(donePin, LOW);
+    watchdogPet = true;
   }
 }
