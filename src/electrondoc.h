@@ -32,8 +32,11 @@
  * D0 - SDA
  * D1 - SCL
  * D2 - Interrupt I2 - int2Pin
+ * D6 - Done Pin - connected to Watchdog Timer
  * D7 - LED on Electron board - LEDPIN
- * A2 - TMP36 Input -  tmp36Pin
+ * A0 - TMP36 Input -  tmp36Pin
+ * B5 - TMP36 Shutdown Pin
+ * A7 - WDT Pin from Watchdog Timer
  *
  *
  * This program is free software: you can redistribute it and/or modify

@@ -5,10 +5,6 @@
 // http://www.nxp.com/products/sensors/accelerometers/3-axis-accelerometers/2g-4g-8g-low-g-12-bit-digital-accelerometer:MMA8452Q?tab=Documentation_Tab
 // Feel free to modify any values, these are settings that work well for me.
 
-// Variables unique to this Header
-//byte accelSensitivity;               // Hex variable for sensitivity
-
-
 
 // Read a single byte from address and return it as a byte
 byte readRegister(int I2CAddress, byte address)
@@ -64,7 +60,7 @@ void MMA8452Active()
 
 void initMMA8452(byte fsr, byte dataRate)
 {
-  byte setSensitivity = 10-FRAMread8(SENSITIVITYADDR);
+  byte setSensitivity = FRAMread8(SENSITIVITYADDR);
   MMA8452Standby();  // Must be in standby to change registers
   // Set up the full scale range to 2, 4, or 8g.
   if ((fsr==2)||(fsr==4)||(fsr==8))

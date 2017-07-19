@@ -45,39 +45,39 @@
  #define HOURLYCOUNTOFFSET 4         // Offsets for the values in the hourly words
  #define HOURLYBATTOFFSET 6          // Where the hourly battery charge is stored
  // Finally, here are the variables I want to change often and pull them all together here
- #define SOFTWARERELEASENUMBER "0.5"
+ #define SOFTWARERELEASENUMBER "0.6"
  #define PARKCLOSES 19
  #define PARKOPENS 7
 
  // Included Libraries
- #include "Adafruit_FRAM_I2C.h"  // Library for FRAM functions
- #include "FRAM-Library-Extensions.h"   // Extends the FRAM Library
- #include "electrondoc.h" // Documents pinout
- #include "MMA8452-Functions.h"  // Adds the accelerometer functions
+ #include "Adafruit_FRAM_I2C.h"                           // Library for FRAM functions
+ #include "FRAM-Library-Extensions.h"                     // Extends the FRAM Library
+ #include "electrondoc.h"                                 // Documents pinout
+ #include "MMA8452-Functions.h"                           // Adds the accelerometer functions
 
  // Prototypes
  STARTUP(System.enableFeature(FEATURE_RESET_INFO));
- FuelGauge batteryMonitor;      // Prorotype for the fuel gauge (included in Particle core library)
+ FuelGauge batteryMonitor;                              // Prototype for the fuel gauge (included in Particle core library)
 
  // Pin Constants
- const int int2Pin = D2;
- const int blueLED = D7;
- const int tmp36Pin = A0;
- const int tmp36Shutdwn = B5;
- const int donePin = D6;
- const int wakeUpPin = A7;    // This is the Particle Electron WKP pin
+ const int int2Pin = D2;              // Acclerometer interrupt pin
+ const int blueLED = D7;              // This LED is on the Electron itself
+ const int tmp36Pin = A0;             // Simple Analog temperature sensor
+ const int tmp36Shutdwn = B5;         // Can turn off the TMP-36 to save energy
+ const int donePin = D6;              // Pin the Electron uses to "pet" the watchdog
+ const int wakeUpPin = A7;            // This is the Particle Electron WKP pin
 
  // Program Variables
- int temperatureF;          // Global variable so we can monitor via cloud variable
- int resetCount;            // Counts the number of times the Electron has had a pin reset
- volatile bool watchdogPet = false; // keeps track of when we have pet the watchdog
- volatile bool doneEnabled = true;  // This enables petting the watchdog
+ int temperatureF;                    // Global variable so we can monitor via cloud variable
+ int resetCount;                      // Counts the number of times the Electron has had a pin reset
+ // volatile bool watchdogPet = false; // keeps track of when we have pet the watchdog
+ volatile bool doneEnabled = true;    // This enables petting the watchdog
 
  // Accelerometer Variables
  const byte accelFullScaleRange = 2;  // Sets full-scale range to +/-2, 4, or 8g. Used to calc real g values.
  const byte dataRate = 3;             // output data rate - 0=800Hz, 1=400, 2=200, 3=100, 4=50, 5=12.5, 6=6.25, 7=1.56
  byte Sensitivity;                    // Hex variable for sensitivity - Initialized in Setup (0 - most to 128 - least sensitive)
- int accelSensitivity;                 // Raw sensitivity input - Initialized in Setup (0 least sensitive -9 most sensitive)
+ int inputSensitivity;                // Raw sensitivity input - Initialized in Setup (0 least sensitive -9 most sensitive)
  int debounce;                        // Debounce value is initialized in setup (debounce is divided by 10 to reduce FRAM storage)
 
  // FRAM and Unix time variables
@@ -129,9 +129,10 @@
    Particle.subscribe("hook-response/daily", myHandler, MY_DEVICES);      // Subscribe to the integration response event
    Particle.variable("RSSIdesc", RSSIdescription);
    Particle.variable("ResetCount", resetCount);
-   Particle.variable("Sensitivity", accelSensitivity);
+   Particle.variable("Sensitivity", inputSensitivity);
    Particle.variable("Debounce", debounce);
    Particle.variable("Temperature",temperatureF);
+   Particle.variable("Releaase",releaseNumber);
    Particle.variable("stateOfChg", stateOfCharge);
    Particle.function("startStop", startStop);
    Particle.function("resetFRAM", resetFRAM);
@@ -173,10 +174,10 @@
   Serial.print("Reset count: ");
   Serial.println(resetCount);
 
-   // Import the accelSensitivity and Debounce values from memory
+   // Import the inputSensitivity and Debounce values from memory
    Serial.print(F("Sensitivity set to: "));
-   accelSensitivity = 10-FRAMread8(SENSITIVITYADDR);
-   Serial.println(accelSensitivity);
+   inputSensitivity = 10-FRAMread8(SENSITIVITYADDR);
+   Serial.println(inputSensitivity);
    Serial.print(F("Debounce set to: "));
    debounce = FRAMread8(DEBOUNCEADDR)*10;     // We mulitply by ten since debounce is stored in 100ths of a second
    Serial.println(debounce);
@@ -254,10 +255,10 @@
                while (Serial.available() == 0) {  // Look for char in serial queue and process if found
                    continue;
                }
-               accelSensitivity = (Serial.parseInt());
-               Serial.print(F("accelSensitivity set to: "));
-               Serial.println(accelSensitivity);
-               FRAMwrite8(SENSITIVITYADDR, 10-accelSensitivity);
+               inputSensitivity = (Serial.parseInt());
+               Serial.print(F("inputSensitivity set to: "));
+               Serial.println(inputSensitivity);
+               FRAMwrite8(SENSITIVITYADDR, 10-inputSensitivity);
                initMMA8452(accelFullScaleRange, dataRate);  // init the accelerometer if communication is OK
                Serial.println(F(" MMA8452Q is online..."));
                break;
@@ -348,11 +349,13 @@
      }
      CheckForBump();
    }
+   /*
    if (watchdogPet)
    {
      Serial.println("We have pet the watchdog");
      watchdogPet = false;
    }
+   */
  }
 
  void CheckForBump() // This is where we check to see if an interrupt is set when not asleep or act on a tap that woke the Arduino
@@ -462,7 +465,7 @@
    digitalWrite(donePin, HIGH);
    digitalWrite(donePin,LOW);     // Pet the dog so we have a full period for a response
    doneEnabled = false;           // Can't pet the dog unless we get a confirmation via Webhook Response and the right Ubidots code.
-   Serial.println("Watchdog petting disabled");
+   // Serial.println("Watchdog petting disabled");
    int currentTemp = getTemperature(0);  // 0 argument for degrees F
    stateOfCharge = int(batteryMonitor.getSoC());
    String data = String::format("{\"hourly\":%i, \"daily\":%i,\"battery\":%i, \"temp\":%i}",hourlyPersonCount, dailyPersonCount, stateOfCharge, currentTemp);
@@ -674,10 +677,10 @@ int setSensivty(String command)  // Will accept a new debounce value in the form
   Serial.println(valueStr);
   if (commandStr == "sensitivity")
   {
-    accelSensitivity = valueStr.toInt();
+    inputSensitivity = valueStr.toInt();
     Serial.print("sensitivity set to:");
-    Serial.println(accelSensitivity);
-    FRAMwrite8(SENSITIVITYADDR, 10-accelSensitivity);
+    Serial.println(inputSensitivity);
+    FRAMwrite8(SENSITIVITYADDR, 10-inputSensitivity);
     initMMA8452(accelFullScaleRange, dataRate);  // init the accelerometer if communication is OK
     Serial.println(F(" MMA8452Q is online..."));
     return 1;
@@ -726,6 +729,6 @@ void watchdogISR()
   {
     digitalWrite(donePin, HIGH);
     digitalWrite(donePin, LOW);
-    watchdogPet = true;
+    //watchdogPet = true;
   }
 }
