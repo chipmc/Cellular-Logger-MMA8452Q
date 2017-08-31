@@ -140,6 +140,7 @@ void setup() {
   Particle.function("SetDebounce",setDebounce);
   Particle.function("SetSensivty", setSensivty);
   Particle.function("SendNow",sendNow);
+  Particle.function("Reset",resetNow);
 
   if (fram.begin()) {                // you can stick the new i2c addr in here, e.g. begin(0x51);
     Serial.println(F("Found I2C FRAM"));
@@ -230,8 +231,17 @@ void loop() {
 
 void recordCount() // This is where we check to see if an interrupt is set when not asleep or act on a tap that woke the Arduino
 {
-  byte source = readRegister(MMA8452_ADDRESS,0x0C);  // Read the interrupt source reg.
-  readRegister(MMA8452_ADDRESS,0x22);  // Reads the PULSE_SRC register to reset it
+  int i=0;
+  byte source = readRegister(MMA8452_ADDRESS,0x0C);       // Read the interrupt source reg.
+  do {                                                    // All these gymanastics are required to ensure the interrupt is reset
+      i++;                                                // Apparently, this is an issue with the MMA8452
+      readRegister(MMA8452_ADDRESS,0x22);                 // Reads the PULSE_SRC register to reset it
+      if (i>=10)                                          // Not sure if this is requried - take out after a month if never triggered
+      {
+        initMMA8452(accelFullScaleRange,dataRate);        // Last Resort
+        Particle.publish("Accelerometer","Reset");
+      }
+  } while(digitalRead(int2Pin));                          // Won't exit the do loop until the accelerometer's interrupt is reset
   sensorDetect = false;      // Reset the flag
   if ((source & 0x08)==0x08 && millis() >= lastBump + debounce)  // We are only interested in the TAP register and ignore debounced taps
   {
@@ -401,6 +411,16 @@ int resetFRAM(String command)   // Will reset the local counts
   if (command == "1")
   {
     ResetFRAM();
+    return 1;
+  }
+  else return 0;
+}
+
+int resetNow(String command)   // Will reset the local counts
+{
+  if (command == "1")
+  {
+    System.reset();
     return 1;
   }
   else return 0;
