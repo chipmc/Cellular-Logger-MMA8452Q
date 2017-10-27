@@ -41,7 +41,7 @@
 #define HOURLYCOUNTOFFSET 4         // Offsets for the values in the hourly words
 #define HOURLYBATTOFFSET 6          // Where the hourly battery charge is stored
 // Finally, here are the variables I want to change often and pull them all together here
-#define SOFTWARERELEASENUMBER "0.81"
+#define SOFTWARERELEASENUMBER "0.9"
 #define PARKCLOSES 19
 #define PARKOPENS 7
 
@@ -60,13 +60,19 @@ const int int2Pin = D2;              // Acclerometer interrupt pin
 const int blueLED = D7;              // This LED is on the Electron itself
 const int tmp36Pin = A0;             // Simple Analog temperature sensor
 const int tmp36Shutdwn = B5;         // Can turn off the TMP-36 to save energy
+const int hardReset = D4;            // Power cycles the Electron and the Carrier board
 const int donePin = D6;              // Pin the Electron uses to "pet" the watchdog
 const int wakeUpPin = A7;            // This is the Particle Electron WKP pin
+const int userSwitch = D5;           // User switch with a pull-up resistor
 
 // Program Variables
 int temperatureF;                    // Global variable so we can monitor via cloud variable
 int resetCount;                      // Counts the number of times the Electron has had a pin reset
 volatile bool doneEnabled = true;    // This enables petting the watchdog
+volatile bool ledsEnabled = true;    // Start with the lights on
+bool lowPowerMode = false;           // This mode will trigger sleeping
+long sleepDelay = 60000;             // Amount of time to stay awake after an event - too short and could cost power
+long lastEvent = 0;                  // Keeps track of the last time there was an event
 
 // Accelerometer Variables
 const byte accelFullScaleRange = 2;  // Sets full-scale range to +/-2, 4, or 8g. Used to calc real g values.
@@ -94,7 +100,6 @@ int countTemp = 0;                   // Will use this to see if we should displa
 int stateOfCharge = 0;            // stores battery charge level value
 
 //Menu and Program Variables
-unsigned long lastBump = 0;         // set the time of an event
 boolean ledState = LOW;             // variable used to store the last LED status, to toggle the light
 boolean inTest = false;             // Are we in a test or not
 int numberHourlyDataPoints;         // How many hourly counts are there
@@ -115,10 +120,12 @@ void setup() {
   pinMode(int2Pin,INPUT);            // accelerometer interrupt pinMode
   pinMode(blueLED, OUTPUT);           // declare the Red LED Pin as an output
   pinMode(tmp36Shutdwn,OUTPUT);      // Supports shutting down the TMP-36 to save juice
+  pinMode(hardReset,OUTPUT);          // Enables the Electron to reset it self and the carrier board
   digitalWrite(tmp36Shutdwn, HIGH);  // Turns on the temp sensor
 
   attachInterrupt(wakeUpPin, watchdogISR, RISING);   // The watchdog timer will signal us and we have to respond
   attachInterrupt(int2Pin,sensorISR,RISING);         // Accelerometer interrupt from low to high
+  attachInterrupt(userSwitch,switchISR,FALLING);     // Sevice routine for the user switch
 
   char responseTopic[125];      // From here: https://community.particle.io/t/using-responsetopic-in-webhook-for-custom-response-to-get-dst-offset/15092
   String deviceID = System.deviceID();
@@ -174,8 +181,6 @@ void setup() {
     resetCount++;
     FRAMwrite8(RESETCOUNT,resetCount);    // If so, store incremented number - watchdog must have done This
   }
-  Serial.print("Reset count: ");
-  Serial.println(resetCount);
 
   // Import the inputSensitivity and Debounce values from memory
   Serial.print(F("Sensitivity set to: "));
@@ -201,7 +206,9 @@ void setup() {
 
   Time.zone(-4);                   // Set time zone to Eastern USA daylight saving time
   getSignalStrength();           // Test signal strength at startup
+  stateOfCharge = int(batteryMonitor.getSoC()); // Percentage of full charge
   StartStopTest(1);                // Default action is for the test to be running
+  Particle.publish("State","Setup Complete");
 }
 
 void loop() {
@@ -213,6 +220,8 @@ void loop() {
   if(dailyPersonCountSent && !dataInFlight) {
      dailyPersonCount -= dailyPersonCountSent;
      FRAMwrite16(CURRENTDAILYCOUNTADDR,hourlyPersonCount);
+     resetCount = 0;  // Reset each day
+     FRAMwrite8(RESETCOUNT,resetCount);    // Reset the count in FRAM as well
      dailyPersonCountSent = 0;
   }
   if (sensorDetect && inTest) {                  // The ISR had raised the sensor flag
@@ -223,9 +232,28 @@ void loop() {
     LogDailyEvent();
     sendEvent(1);
   }
-  if ((Time.hour() != currentHourlyPeriod) && hourlyPersonCount) {  // Spring into action each hour on the hour as long as we have counts
+  if (Time.hour() != currentHourlyPeriod) {  // Spring into action each hour on the hour as long as we have counts
     LogHourlyEvent();
     sendEvent(0);
+  }
+  if (lowPowerMode && (millis() >= (lastEvent + sleepDelay)))
+  {
+    detachInterrupt(int2Pin);                         // Not sure what would happen here so detaching
+    sensorDetect = true;                              // Woke up so there must have been an event
+    lastEvent = millis();
+    Serial.print("Going to sleep ...");
+    static int secondsToHour = (60 - Time.minute())*60;
+    System.sleep(int2Pin,RISING,secondsToHour,SLEEP_NETWORK_STANDBY);
+    Serial.println("waking up");
+    attachInterrupt(int2Pin,sensorISR,RISING);         // Accelerometer interrupt from low to high
+  }
+  if (resetCount >3) {
+    sendEvent(0);
+    resetCount = 0;
+    FRAMwrite8(RESETCOUNT,resetCount);    // Reset the count in FRAM as well
+    Particle.publish("System","Hard Reset");
+    //Particle.disconnect();
+    //digitalWrite(hardReset,HIGH);
   }
 }
 
@@ -243,10 +271,10 @@ void recordCount() // This is where we check to see if an interrupt is set when 
       }
   } while(digitalRead(int2Pin));                          // Won't exit the do loop until the accelerometer's interrupt is reset
   sensorDetect = false;      // Reset the flag
-  if ((source & 0x08)==0x08 && millis() >= lastBump + debounce)  // We are only interested in the TAP register and ignore debounced taps
+  if ((source & 0x08)==0x08 && millis() >= lastEvent + debounce)  // We are only interested in the TAP register and ignore debounced taps
   {
     Serial.println(F("It is a tap - counting"));
-    lastBump = millis();    // Reset last bump timer
+    lastEvent = millis();    // Reset last bump timer
     t = Time.now();
     hourlyPersonCount++;                    // Increment the PersonCount
     FRAMwrite16(CURRENTHOURLYCOUNTADDR, hourlyPersonCount);  // Load Hourly Count to memory
@@ -260,9 +288,9 @@ void recordCount() // This is where we check to see if an interrupt is set when 
     Serial.print(F("  Time: "));
     Serial.println(Time.timeStr(t)); // Prints time t - example: Wed May 21 01:08:47 2014
     ledState = !ledState;              // toggle the status of the LEDPIN:
-    digitalWrite(blueLED, ledState);    // update the LED pin itself
+    if (ledsEnabled) digitalWrite(blueLED, ledState);    // update the LED pin itself
   }
-  else if (millis() < lastBump + debounce) Serial.println(F("Tap was debounced"));
+  else if (millis() < lastEvent + debounce) Serial.println(F("Tap was debounced"));
   else if ((source & 0x08) != 0x08) Serial.println(F("Interrupt not a tap"));
 }
 
@@ -337,8 +365,8 @@ void sendEvent(bool dailyEvent)
   digitalWrite(donePin,LOW);     // Pet the dog so we have a full period for a response
   doneEnabled = false;           // Can't pet the dog unless we get a confirmation via Webhook Response and the right Ubidots code.
   char data[256];                                         // Store the date in this character array - not global
-  snprintf(data, sizeof(data), "{\"hourly\":%i, \"daily\":%i,\"battery\":%i, \"temp\":%i}",hourlyPersonCount, dailyPersonCount, stateOfCharge, currentTemp);
-  Particle.publish("Send_Counts", data, PRIVATE);
+  snprintf(data, sizeof(data), "{\"hourly\":%i, \"daily\":%i,\"battery\":%i, \"temp\":%i, \"resets\":%i}",hourlyPersonCount, dailyPersonCount, stateOfCharge, currentTemp,resetCount);
+  Particle.publish("Ubidots-Hook", data, PRIVATE);
   if (dailyEvent)
   {
     dailyPersonCountSent = dailyPersonCount; // This is the number that was sent to Ubidots - will be subtracted once we get confirmation
@@ -354,20 +382,20 @@ void UbidotsHandler(const char *event, const char *data)  // Looks at the respon
 {
   // Response Template: "{{hourly.0.status_code}}"
   if (!data) {                                            // First check to see if there is any data
-   Particle.publish("UbidotsResp", "No Data");
+   Particle.publish("Ubidots", "No Data");
    return;
   }
   int responseCode = atoi(data);                          // Response is only a single number thanks to Template
   if ((responseCode == 200) || (responseCode == 201))
   {
-    Particle.publish("UbidotsHook","Success");
+    Particle.publish("Ubidots","Success");
     Serial.println("Request successfully completed");
     dataInFlight = false;                                 // Data has been received
     doneEnabled = true;                                   // Successful response - can pet the dog again
     digitalWrite(donePin, HIGH);                          // If an interrupt came in while petting disabled, we missed it so...
     digitalWrite(donePin, LOW);                           // will pet the dog just to be safe
   }
-  else Particle.publish("UbidotsHook", data);             // Publish the response code
+  else Particle.publish("Ubidots", data);             // Publish the response code
 }
 
 int resetCounts(String command)   // Will reset the local counts
@@ -416,7 +444,7 @@ int resetFRAM(String command)   // Will reset the local counts
   else return 0;
 }
 
-int resetNow(String command)   // Will reset the local counts
+int resetNow(String command)   // Will reset the Electron
 {
   if (command == "1")
   {
@@ -499,6 +527,16 @@ void NonBlockingDelay(int millisDelay)  // Used for a non-blocking delay
     Particle.process();
   }
   return;
+}
+
+void switchISR()
+{
+  RGB.control(true);
+  if (!ledsEnabled) RGB.brightness(255);  // turn on or off the lights
+  else RGB.brightness(0);  // turn on or off the lights
+  RGB.control(false);
+  digitalWrite(blueLED,LOW);
+  ledsEnabled = !ledsEnabled;
 }
 
 void BlinkForever() // When something goes badly wrong...
